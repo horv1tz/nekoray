@@ -12,6 +12,7 @@ on:
       artifact-pack:
         description: "artifact-pack: If want ignore"
         required: false
+
 jobs:
   build-go:
     strategy:
@@ -20,7 +21,7 @@ jobs:
         cross_arch: [amd64]
         include:
           - cross_os: public_res
-            cross_arch: public_res
+              cross_arch: public_res
       fail-fast: false
     runs-on: ubuntu-latest
     steps:
@@ -55,6 +56,7 @@ jobs:
         with:
           name: NekoRay-${{ github.sha }}-Common-${{ matrix.cross_os }}-${{ matrix.cross_arch }}
           path: artifacts.tgz
+
   build-cpp:
     strategy:
       matrix:
@@ -65,44 +67,81 @@ jobs:
           - platform: ubuntu-20.04
             arch: x64
             qt_version: "5.12"
+          - platform: fedora-41
+            arch: x64
+            qt_version: "6.5"
       fail-fast: false
 
-    runs-on: ${{ matrix.platform }}
+    runs-on: ${{ 
+      matrix.platform == 'windows-2022' && 'windows-2022' || 
+      matrix.platform == 'ubuntu-20.04' && 'ubuntu-20.04' || 
+      'ubuntu-latest' 
+    }}
+    
+    container: ${{ 
+      matrix.platform == 'fedora-41' && 'fedora:41' || '' 
+    }}
+    
     env:
       ACTIONS_ALLOW_UNSECURE_COMMANDS: true
+
     steps:
       - name: Checking out sources
         uses: actions/checkout@v3
         with:
           submodules: "recursive"
+
+      # Windows: MSVC Setup
       - name: Install MSVC compiler
         if: matrix.platform == 'windows-2022'
         uses: ilammy/msvc-dev-cmd@v1
         with:
-          # 14.1 is for vs2017, 14.2 is vs2019, following the upstream vcpkg build from Qv2ray-deps repo
           toolset: 14.2
           arch: ${{ matrix.arch }}
-      # ========================================================================================================= Qt Install
+
+      # Qt Installation
       - name: Windows - Download Custom Qt ${{ matrix.qt_version }} SDK
         shell: bash
         if: matrix.platform == 'windows-2022'
         env:
           DL_QT_VER: ${{ matrix.qt_version }}
         run: bash ./libs/download_qtsdk_win.sh
-      # ========================================================================================================= 编译与 Qt 无关的依赖
+
+      # Fedora Dependencies
+      - name: Fedora - Install Dependencies
+        if: matrix.platform == 'fedora-41'
+        run: |
+          dnf update -y
+          dnf install -y \
+            cmake \
+            ninja-build \
+            gcc-c++ \
+            qt6-qtbase-devel \
+            qt6-qttools-devel \
+            openssl-devel \
+            zlib-devel \
+            git \
+            make \
+            tar
+
+      # Common Dependencies
       - name: Install ninja-build tool
         uses: seanmiddleditch/gha-setup-ninja@v3
+
       - name: Cache Download
         id: cache-deps
         uses: actions/cache@v3
         with:
           path: libs/deps
           key: DepsCache-${{ matrix.platform }}-${{ matrix.arch }}-${{ hashFiles('libs/build_deps_*.sh') }}-Qt${{ matrix.qt_version }}
-      - name: Build Dependencies
+
+      # Dependencies Build
+      - name: Build Dependencies (Windows)
         shell: bash
-        if: steps.cache-deps.outputs.cache-hit != 'true' && matrix.platform != 'ubuntu-20.04'
+        if: steps.cache-deps.outputs.cache-hit != 'true' && matrix.platform == 'windows-2022'
         run: ./libs/build_deps_all.sh
-      - name: Build Dependencies (Docker)
+
+      - name: Build Dependencies (Linux)
         shell: bash
         if: steps.cache-deps.outputs.cache-hit != 'true' && matrix.platform == 'ubuntu-20.04'
         run: |
@@ -111,7 +150,12 @@ jobs:
             -w /nekoray \
             ghcr.io/matsuridayo/debian10-qt5:20230131 \
             bash -c "./libs/build_deps_all.sh"
-      # ========================================================================================================= Generate MakeFile and Build
+
+      - name: Build Dependencies (Fedora)
+        if: steps.cache-deps.outputs.cache-hit != 'true' && matrix.platform == 'fedora-41'
+        run: ./libs/build_deps_all.sh
+
+      # Build Steps
       - name: Windows - Generate MakeFile and Build
         shell: bash
         if: matrix.platform == 'windows-2022'
@@ -127,6 +171,7 @@ jobs:
           ninja -j2
           cd ..
           ./libs/deploy_windows64.sh
+
       - name: Linux - Generate MakeFile and Build
         shell: bash
         if: matrix.platform == 'ubuntu-20.04'
@@ -135,16 +180,29 @@ jobs:
             -v $PWD:/nekoray \
             -w /nekoray \
             ghcr.io/matsuridayo/debian10-qt5:20230131 \
-            bash -c "mkdir build && pushd build && cmake -GNinja -DCMAKE_BUILD_TYPE=Release .. && ninja && popd &&./libs/deploy_linux64.sh"
-      # ========================================================================================================= Deployments
+            bash -c "mkdir build && pushd build && cmake -GNinja -DCMAKE_BUILD_TYPE=Release .. && ninja && popd && ./libs/deploy_linux64.sh"
+
+      - name: Fedora - Generate MakeFile and Build
+        if: matrix.platform == 'fedora-41'
+        run: |
+          mkdir build
+          cd build
+          cmake -GNinja -DQT_VERSION_MAJOR=6 -DCMAKE_BUILD_TYPE=Release ..
+          ninja
+          cd ..
+          ./libs/deploy_linux64.sh
+
+      # Packaging
       - name: Tar files
         shell: bash
         run: tar czvf artifacts.tgz ./deployment
+
       - name: Uploading Artifact
         uses: actions/upload-artifact@v3
         with:
           name: NekoRay-${{ github.sha }}-${{ matrix.platform }}-${{ matrix.arch }}-Qt${{ matrix.qt_version }}
           path: artifacts.tgz
+
   publish:
     name: Pack & Publish Release
     if: github.event.inputs.artifact-pack != 'y'
@@ -155,48 +213,67 @@ jobs:
     steps:
       - name: Checking out sources
         uses: actions/checkout@v3
+      
       - name: Download Artifacts
         uses: actions/download-artifact@v3
         with:
           path: download-artifact
+      
       - name: Pack
         run: |
           curl -Lo - https://github.com/tcnksm/ghr/releases/download/v0.13.0/ghr_v0.13.0_linux_amd64.tar.gz | tar xzv
           mv ghr*linux_amd64/ghr .
-          ####
+          
           source libs/env_deploy.sh
           find . -name artifacts.tgz | xargs -n1 tar xvzf
           cd deployment
+          
           cp -r public_res/* linux64
           cp -r public_res/* windows64
           rm -rf public_res *.pdb
-          ####
+          
+          # Linux Standalone
           mv linux64 nekoray
           zip -r $version_standalone-linux64.zip nekoray
           rm -rf nekoray
-          ####
+          
+          # Windows Standalone
           mv windows64 nekoray
           zip -r $version_standalone-windows64.zip nekoray
           rm -rf nekoray
+
       - name: Pack Debian
         run: |
           source libs/env_deploy.sh
           find . -name artifacts.tgz | xargs -n1 tar xvzf
           cd deployment
           cp -r public_res/* linux64
-          ####
+          
           bash ../libs/package_debian.sh ${{ github.event.inputs.tag }}
           mv nekoray.deb $version_standalone-debian-x64.deb
           sudo rm -rf nekoray
+
+      - name: Pack RPM (Fedora)
+        run: |
+          source libs/env_deploy.sh
+          find . -name artifacts.tgz | xargs -n1 tar xvzf
+          cd deployment
+          cp -r public_res/* linux64
+          
+          bash ../libs/package_rpm.sh ${{ github.event.inputs.tag }}
+          mv nekoray.rpm $version_standalone-fedora-x64.rpm
+          sudo rm -rf nekoray
+
       - name: Pack AppImage
         run: |
           source libs/env_deploy.sh
           find . -name artifacts.tgz | xargs -n1 tar xvzf
           cd deployment
           cp -r public_res/* linux64
-          ####
+          
           bash ../libs/package_appimage.sh
           mv nekobox-x86_64.AppImage $version_standalone-linux-x64.AppImage
+
       - name: Clean Up
         run: |
           cd deployment
@@ -204,11 +281,13 @@ jobs:
           rm -rf windows64
           rm -rf public_res
           rm -rf *.pdb
+
       - name: Uploading Artifact
         uses: actions/upload-artifact@v3
         with:
           name: Deployment-${{ github.sha }}
           path: deployment
+
       - name: Release
         if: github.event.inputs.publish != 'y'
         run: |
