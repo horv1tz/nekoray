@@ -91,7 +91,6 @@ jobs:
         with:
           submodules: "recursive"
 
-      # Windows: MSVC Setup
       - name: Install MSVC compiler
         if: matrix.platform == 'windows-2022'
         uses: ilammy/msvc-dev-cmd@v1
@@ -99,7 +98,6 @@ jobs:
           toolset: 14.2
           arch: ${{ matrix.arch }}
 
-      # Qt Installation
       - name: Windows - Download Custom Qt ${{ matrix.qt_version }} SDK
         shell: bash
         if: matrix.platform == 'windows-2022'
@@ -107,7 +105,6 @@ jobs:
           DL_QT_VER: ${{ matrix.qt_version }}
         run: bash ./libs/download_qtsdk_win.sh
 
-      # Fedora Dependencies
       - name: Fedora - Install Dependencies
         if: matrix.platform == 'fedora-41'
         run: |
@@ -124,7 +121,6 @@ jobs:
             make \
             tar
 
-      # Common Dependencies
       - name: Install ninja-build tool
         uses: seanmiddleditch/gha-setup-ninja@v3
 
@@ -135,7 +131,6 @@ jobs:
           path: libs/deps
           key: DepsCache-${{ matrix.platform }}-${{ matrix.arch }}-${{ hashFiles('libs/build_deps_*.sh') }}-Qt${{ matrix.qt_version }}
 
-      # Dependencies Build
       - name: Build Dependencies (Windows)
         shell: bash
         if: steps.cache-deps.outputs.cache-hit != 'true' && matrix.platform == 'windows-2022'
@@ -155,7 +150,6 @@ jobs:
         if: steps.cache-deps.outputs.cache-hit != 'true' && matrix.platform == 'fedora-41'
         run: ./libs/build_deps_all.sh
 
-      # Build Steps
       - name: Windows - Generate MakeFile and Build
         shell: bash
         if: matrix.platform == 'windows-2022'
@@ -192,7 +186,6 @@ jobs:
           cd ..
           ./libs/deploy_linux64.sh
 
-      # Packaging
       - name: Tar files
         shell: bash
         run: tar czvf artifacts.tgz ./deployment
@@ -232,12 +225,10 @@ jobs:
           cp -r public_res/* windows64
           rm -rf public_res *.pdb
           
-          # Linux Standalone
           mv linux64 nekoray
           zip -r $version_standalone-linux64.zip nekoray
           rm -rf nekoray
           
-          # Windows Standalone
           mv windows64 nekoray
           zip -r $version_standalone-windows64.zip nekoray
           rm -rf nekoray
