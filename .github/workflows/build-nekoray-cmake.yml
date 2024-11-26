@@ -21,7 +21,7 @@ jobs:
         cross_arch: [amd64]
         include:
           - cross_os: public_res
-              cross_arch: public_res
+            cross_arch: public_res
       fail-fast: false
     runs-on: ubuntu-latest
     steps:
